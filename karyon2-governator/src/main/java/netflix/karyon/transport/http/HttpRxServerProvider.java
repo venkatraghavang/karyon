@@ -1,25 +1,36 @@
 package netflix.karyon.transport.http;
 
+import static netflix.karyon.utils.TypeUtils.keyFor;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.util.SelfSignedCertificate;
+import io.reactivex.netty.metrics.MetricEventsListenerFactory;
+import io.reactivex.netty.pipeline.PipelineConfigurator;
+import io.reactivex.netty.pipeline.ssl.SSLEngineFactory;
+import io.reactivex.netty.protocol.http.server.HttpServer;
+import io.reactivex.netty.protocol.http.server.HttpServerBuilder;
+import io.reactivex.netty.protocol.http.server.RequestHandler;
+
+import java.io.File;
+import java.security.cert.CertificateException;
+
+import javax.annotation.PreDestroy;
+import javax.net.ssl.SSLEngine;
+import javax.net.ssl.SSLException;
+
+import netflix.karyon.transport.AbstractServerModule.ServerConfig;
+import netflix.karyon.transport.KaryonTransport;
+import netflix.karyon.transport.http.KaryonHttpModule.HttpServerConfig;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.google.inject.Inject;
 import com.google.inject.Injector;
 import com.google.inject.Key;
 import com.google.inject.Provider;
 import com.google.inject.name.Named;
 import com.google.inject.name.Names;
-import io.reactivex.netty.metrics.MetricEventsListenerFactory;
-import io.reactivex.netty.pipeline.PipelineConfigurator;
-import io.reactivex.netty.protocol.http.server.HttpServer;
-import io.reactivex.netty.protocol.http.server.HttpServerBuilder;
-import io.reactivex.netty.protocol.http.server.RequestHandler;
-import netflix.karyon.transport.AbstractServerModule.ServerConfig;
-import netflix.karyon.transport.KaryonTransport;
-import netflix.karyon.transport.http.KaryonHttpModule.HttpServerConfig;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-import javax.annotation.PreDestroy;
-
-import static netflix.karyon.utils.TypeUtils.keyFor;
 
 /**
  * @author Tomasz Bak
@@ -30,6 +41,7 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
     private static final Logger logger = LoggerFactory.getLogger(HttpRxServerProvider.class);
 
     private final Named nameAnnotation;
+    private final boolean enableSSL = Boolean.parseBoolean(System.getProperty("karyon.ssl","false"));
 
     private final Key<RequestHandler<I, O>> routerKey;
     private final Key<GovernatorHttpInterceptorSupport<I, O>> interceptorSupportKey;
@@ -86,8 +98,48 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
         if (injector.getExistingBinding(metricEventsListenerFactoryKey) != null) {
             builder.withMetricEventsListenerFactory(injector.getInstance(metricEventsListenerFactoryKey));
         }
+        
+        if (enableSSL)
+            builder.withSslEngineFactory(new CustomSSLEngineFactory());
 
         httpServer = builder.build().start();
         logger.info("Starting server {} on port {}...", nameAnnotation.value(), httpServer.getServerPort());
+    }
+    
+    private static class CustomSSLEngineFactory implements SSLEngineFactory {
+
+        private final SslContext sslCtx;
+        private static String certPath = System.getProperty("karyon.ssl.certificate", null);
+        private static String privateKeyPath = System.getProperty("karyon.ssl.privatekey", null);
+
+        private CustomSSLEngineFactory() {
+            if (certPath == null || privateKeyPath == null)
+                generateSelfSignedCert();
+            logger.info("Setting up SSL Context using the certificate [" + certPath + "] and private key ["
+                    + privateKeyPath + "]");
+            try {
+                sslCtx = SslContext.newServerContext(new File(certPath), new File(privateKeyPath));
+            } catch (SSLException e) {
+                throw new IllegalStateException("Failed to create Netty's Ssl context with the specified certificate",
+                        e);
+            }
+        }
+
+        private void generateSelfSignedCert() {
+            logger.info("No external certificate or private key provided. Trying to generate a self signed certificate.");
+            SelfSignedCertificate ssc;
+            try {
+                ssc = new SelfSignedCertificate();
+            } catch (CertificateException e) {
+                throw new IllegalStateException("Self signed certificate creation error", e);
+            }
+            certPath = ssc.certificate().getAbsolutePath();
+            privateKeyPath = ssc.privateKey().getAbsolutePath();
+        }
+
+        @Override
+        public SSLEngine createSSLEngine(ByteBufAllocator allocator) {
+            return sslCtx.newEngine(allocator);
+        }
     }
 }
