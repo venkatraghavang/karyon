@@ -41,8 +41,6 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
     private static final Logger logger = LoggerFactory.getLogger(HttpRxServerProvider.class);
 
     private final Named nameAnnotation;
-    private final boolean enableSSL = Boolean.parseBoolean(System.getProperty("karyon.ssl","false"));
-
     private final Key<RequestHandler<I, O>> routerKey;
     private final Key<GovernatorHttpInterceptorSupport<I, O>> interceptorSupportKey;
     @SuppressWarnings("rawtypes")
@@ -51,6 +49,7 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
     private final Key<ServerConfig> serverConfigKey;
 
     private volatile HttpServer<I, O> httpServer;
+    private volatile HttpServer<I, O> httpsServer;
 
     public HttpRxServerProvider(String name, Class<I> iType, Class<O> oType) {
         nameAnnotation = Names.named(name);
@@ -72,11 +71,17 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
         if (httpServer != null) {
             httpServer.shutdown();
         }
+        if (httpsServer != null) {
+            httpsServer.shutdown();
+        }
     }
 
     @SuppressWarnings("rawtypes")
     @Inject
     public void setInjector(Injector injector) {
+        boolean enableSSL = Boolean.parseBoolean(System.getProperty("karyon.ssl", "false"));
+        int sslPort = Integer.parseInt(System.getProperty("karyon.ssl.port", "8443"));
+        
         HttpServerConfig config = (HttpServerConfig) injector.getInstance(serverConfigKey);
 
         RequestHandler router = injector.getInstance(routerKey);
@@ -86,24 +91,30 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
         HttpRequestHandler<I, O> httpRequestHandler = new HttpRequestHandler<I, O>(router, interceptorSupport);
 
         HttpServerBuilder<I, O> builder = KaryonTransport.newHttpServerBuilder(config.getPort(), httpRequestHandler);
+        HttpServerBuilder<I, O> sslBuilder = KaryonTransport.newHttpServerBuilder(sslPort, httpRequestHandler);
 
         if (config.requiresThreadPool()) {
             builder.withRequestProcessingThreads(config.getThreadPoolSize());
+            sslBuilder.withRequestProcessingThreads(config.getThreadPoolSize());
         }
 
         if (injector.getExistingBinding(pipelineConfiguratorKey) != null) {
             builder.appendPipelineConfigurator(injector.getInstance(pipelineConfiguratorKey));
+            sslBuilder.appendPipelineConfigurator(injector.getInstance(pipelineConfiguratorKey));
         }
 
         if (injector.getExistingBinding(metricEventsListenerFactoryKey) != null) {
             builder.withMetricEventsListenerFactory(injector.getInstance(metricEventsListenerFactoryKey));
+            sslBuilder.withMetricEventsListenerFactory(injector.getInstance(metricEventsListenerFactoryKey));
         }
-        
-        if (enableSSL)
-            builder.withSslEngineFactory(new CustomSSLEngineFactory());
-
         httpServer = builder.build().start();
-        logger.info("Starting server {} on port {}...", nameAnnotation.value(), httpServer.getServerPort());
+        logger.info("Starting Rx HTTP Server {} on port {}...", nameAnnotation.value(), httpServer.getServerPort());     
+
+        if (enableSSL) {
+            sslBuilder.withSslEngineFactory(new CustomSSLEngineFactory());
+            httpsServer = sslBuilder.build().start();
+            logger.info("Starting Rx HTTPS Server {} on port {}...", nameAnnotation.value(), httpsServer.getServerPort());
+        }
     }
     
     private static class CustomSSLEngineFactory implements SSLEngineFactory {
