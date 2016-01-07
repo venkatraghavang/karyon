@@ -2,7 +2,11 @@ package netflix.karyon.transport.http;
 
 import static netflix.karyon.utils.TypeUtils.keyFor;
 import io.netty.buffer.ByteBufAllocator;
+import io.netty.handler.ssl.ApplicationProtocolConfig;
+import io.netty.handler.ssl.CipherSuiteFilter;
+import io.netty.handler.ssl.IdentityCipherSuiteFilter;
 import io.netty.handler.ssl.SslContext;
+import io.netty.handler.ssl.SslProvider;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.reactivex.netty.metrics.MetricEventsListenerFactory;
 import io.reactivex.netty.pipeline.PipelineConfigurator;
@@ -122,14 +126,19 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
         private final SslContext sslCtx;
         private static String certPath = System.getProperty("karyon.ssl.certificate", null);
         private static String privateKeyPath = System.getProperty("karyon.ssl.privatekey", null);
-
+        private static String cipherSuitesList = System.getProperty("karyon.ssl.ciphersuites",null);
+        private static int sessionSize = Integer.parseInt(System.getProperty("karyon.ssl.session.size","1000")); 
+        private static int sessionTimeout = Integer.parseInt(System.getProperty("karyon.ssl.session.timeout","300")); //5 minutes
         private CustomSSLEngineFactory() {
             if (certPath == null || privateKeyPath == null)
                 generateSelfSignedCert();
-            logger.info("Setting up SSL Context using the certificate [" + certPath + "] and private key ["
-                    + privateKeyPath + "]");
+            if(cipherSuitesList==null)
+                cipherSuitesList="SSL_RSA_WITH_AES_128_CBC_SHA256,SSL_RSA_WITH_AES_128_CBC_SHA,SSL_RSA_WITH_AES_256_CBC_SHA256,SSL_RSA_WITH_AES_256_CBC_SHA";
+            logger.info("Setting up SSL Context using the certificate [" + certPath + "], private key ["
+                    + privateKeyPath + "], Session Size ["+sessionSize+"], Session timeout ["+sessionTimeout+"] and Cipher Suites ["+cipherSuitesList+"]");
             try {
-                sslCtx = SslContext.newServerContext(new File(certPath), new File(privateKeyPath));
+                sslCtx = SslContext.newServerContext(null,new File(certPath), new File(privateKeyPath)
+                      ,null,null, IdentityCipherSuiteFilter.INSTANCE,null,sessionSize,sessionTimeout);
             } catch (SSLException e) {
                 throw new IllegalStateException("Failed to create Netty's Ssl context with the specified certificate",
                         e);
@@ -150,7 +159,11 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
 
         @Override
         public SSLEngine createSSLEngine(ByteBufAllocator allocator) {
-            return sslCtx.newEngine(allocator);
+            SSLEngine sslEngine =  sslCtx.newEngine(allocator);
+            sslEngine.setEnabledProtocols(new String[] { "TLS" });
+            String cipherSuiteArray[] = cipherSuitesList.split(",");
+            sslEngine.setEnabledCipherSuites(cipherSuiteArray);
+            return sslEngine;
         }
     }
 }
