@@ -132,10 +132,10 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
         private CustomSSLEngineFactory() {
             if (certPath == null || privateKeyPath == null)
                 generateSelfSignedCert();
-            if(cipherSuitesList==null)
-                cipherSuitesList="SSL_RSA_WITH_AES_128_CBC_SHA256,SSL_RSA_WITH_AES_128_CBC_SHA,SSL_RSA_WITH_AES_256_CBC_SHA256,SSL_RSA_WITH_AES_256_CBC_SHA";
+            if (cipherSuitesList != null && cipherSuitesList.equals("default"))
+                cipherSuitesList = "SSL_RSA_WITH_AES_128_CBC_SHA256,SSL_RSA_WITH_AES_128_CBC_SHA,SSL_RSA_WITH_AES_256_CBC_SHA256,SSL_RSA_WITH_AES_256_CBC_SHA";
             logger.info("Setting up SSL Context using the certificate [" + certPath + "], private key ["
-                    + privateKeyPath + "], Session Size ["+sessionSize+"], Session timeout ["+sessionTimeout+"] and Cipher Suites ["+cipherSuitesList+"]");
+                    + privateKeyPath + "], Session Size ["+sessionSize+"], Session timeout ["+sessionTimeout+"]");
             try {
                 sslCtx = SslContext.newServerContext(null,new File(certPath), new File(privateKeyPath)
                       ,null,null, IdentityCipherSuiteFilter.INSTANCE,null,sessionSize,sessionTimeout);
@@ -161,8 +161,10 @@ public class HttpRxServerProvider<I, O, S extends HttpServer<I, O>> implements P
         public SSLEngine createSSLEngine(ByteBufAllocator allocator) {
             SSLEngine sslEngine =  sslCtx.newEngine(allocator);
             sslEngine.setEnabledProtocols(new String[] { "TLS" });
-            String cipherSuiteArray[] = cipherSuitesList.split(",");
-            sslEngine.setEnabledCipherSuites(cipherSuiteArray);
+            if (cipherSuitesList != null) {
+                String cipherSuiteArray[] = cipherSuitesList.split(",");
+                sslEngine.setEnabledCipherSuites(cipherSuiteArray);
+            }
             return sslEngine;
         }
     }
